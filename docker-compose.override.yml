@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+
+  portal-booking-app:
+    volumes:
+      - ./portal-booking:/var/www/html
+
+  portal-booking-nginx:
+    ports:
+      - "8000:80"
+    volumes:
+      - ./portal-booking:/var/www/html
+      - ./portal-booking/docker-compose/nginx/conf.d:/etc/nginx/conf.d
+
+  room-service-app:
+    volumes:
+      - ./room-service:/var/www/html
+
+  room-service-nginx:
+    ports:
+      - "8001:80"
+    volumes:
+      - ./room-service:/var/www/html
+      - ./room-service/docker-compose/nginx/conf.d:/etc/nginx/conf.d

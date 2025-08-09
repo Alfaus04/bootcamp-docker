@@ -8,4 +8,6 @@ Route::get('/user', function (Request $request) {
     return $request->user();
 })->middleware('auth:sanctum');
 
-Route::apiResource('rooms', RoomController::class);
+Route::middleware('auth:sanctum')->group(function() {
+    Route::apiResource('rooms', RoomController::class);
+});

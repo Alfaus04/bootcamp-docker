@@ -4,7 +4,10 @@ namespace App\Http\Controllers;
 
 use App\Models\Booking;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
+
 
 class BookingController extends Controller
 {
@@ -16,14 +19,23 @@ class BookingController extends Controller
 
     public function create()
     {
-        // Panggil API room-service
-        $response = Http::get('http://room-service-nginx/rooms');
+        try {
+            $response = Http::withToken(config('services.room.token'))
+                ->timeout(15)
+                ->get('http://room-service-nginx/api/rooms');
 
-        // Cek apakah berhasil
-        if ($response->successful()) {
-            $rooms = $response->json();
-        } else {
-            $rooms = []; // fallback kosong
+            if ($response->successful()) {
+                $rooms = $response->json();
+            } else {
+                Log::error('Failed to fetch rooms', [
+                    'status' => $response->status(),
+                    'body' => $response->body()
+                ]);
+                $rooms = [];
+            }
+        } catch (\Exception $e) {
+            Log::error('Error fetching rooms: ' . $e->getMessage());
+            $rooms = [];
         }
 
         return view('bookings.create', compact('rooms'));
@@ -31,7 +43,7 @@ class BookingController extends Controller
 
     public function store(Request $request)
     {
-        $request->validate([
+        $validated = $request->validate([
             'user_id' => 'required|integer',
             'room_id' => 'required|integer',
             'title' => 'required|string|max:255',
@@ -39,16 +51,40 @@ class BookingController extends Controller
             'end_time' => 'required|date|after:start_time',
         ]);
 
-        Booking::create([
-            'user_id' => $request->user_id,
-            'room_id' => $request->room_id,
-            'title' => $request->title,
-            'start_time' => $request->start_time,
-            'end_time' => $request->end_time,
-        ]);
+        $conflict = Booking::where('room_id', $validated['room_id'])
+            ->where(function ($query) use ($validated) {
+                $query->whereBetween('start_time', [$validated['start_time'], $validated['end_time']])
+                    ->orWhereBetween('end_time', [$validated['start_time'], $validated['end_time']])
+                    ->orWhere(function ($q) use ($validated) {
+                        $q->where('start_time', '<=', $validated['start_time'])
+                        ->where('end_time', '>=', $validated['end_time']);
+                    });
+            })
+            ->exists();
 
-        return redirect()->route('bookings.index');
+        if ($conflict) {
+            return back()->withErrors(['start_time' => 'Jadwal bentrok dengan booking lain di ruangan ini.'])->withInput();
+        }
+
+        $token = config('services.room.token');
+        
+        try {
+            $response = Http::timeout(10)
+                ->withToken($token)
+                ->get("http://room-service-nginx/api/rooms/" . $validated['room_id']);
+
+            if ($response->failed()) {
+                return back()->withErrors(['room_id' => "Ruangan tidak tersedia atau tidak valid"])->withInput();
+            }
+        } catch (\Exception $e) {
+            return back()->withErrors(['room_id' => "Gagal terhubung ke layanan ruangan"])->withInput();
+        }
+
+        Booking::create($validated);
+
+        return redirect()->route('bookings.index')->with('success', 'Booking berhasil disimpan');
     }
+
 
     public function edit($id)
     {
